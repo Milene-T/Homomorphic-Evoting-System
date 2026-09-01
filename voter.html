@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Electronic Voter Booth</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #eef2f7; margin: 40px; color: #333; }
+        .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 500px; margin: 0 auto; }
+        h2 { border-bottom: 2px solid #0056b3; padding-bottom: 10px; color: #0056b3; margin-top: 0; }
+        label { display: block; margin: 15px 0 5px; font-weight: bold; }
+        input[type="text"], select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background: #0056b3; color: white; border: none; padding: 12px 20px; border-radius: 4px; cursor: pointer; width: 100%; margin-top: 20px; font-size: 16px; }
+        button:hover { background: #004085; }
+        .log-box { background: #222; color: #00ff00; font-family: monospace; padding: 15px; margin-top: 25px; border-radius: 4px; height: 180px; overflow-y: auto; font-size: 13px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>Secure Voting Terminal</h2>
+    
+    <label>Enter Voter ID:</label>
+    <input type="text" id="voterId" placeholder="e.g., voter_01">
+    
+    <label>Cast Your Vote:</label>
+    <select id="voteChoice">
+        <option value="1">YES (Pro-Initiative)</option>
+        <option value="0">NO (Anti-Initiative)</option>
+    </select>
+    
+    <button onclick="executeSecureVotingSequence()">Submit Encrypted Vote</button>
+    
+    <div class="log-box" id="terminalLogs">Ready to initiate pipeline...</div>
+</div>
+
+<script>
+    function logToTerminal(text) {
+        const logBox = document.getElementById("terminalLogs");
+        logBox.innerHTML += "<br>> " + text;
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    // Modular Exponentiation for BigInt
+    function modPow(base, exp, mod) {
+        let res = 1n;
+        base = base % mod;
+        while (exp > 0n) {
+            if (exp % 2n === 1n) res = (res * base) % mod;
+            base = (base * base) % mod;
+            exp = exp / 2n;
+        }
+        return res;
+    }
+
+    async function executeSecureVotingSequence() {
+        const voterId = document.getElementById("voterId").value;
+        const choice = parseInt(document.getElementById("voteChoice").value);
+        
+        if(!voterId) { alert("Please input your Voter ID."); return; }
+
+        try {
+            // 1. Authenticate
+            logToTerminal("Authenticating with Registration Server...");
+            let authResponse = await fetch('http://127.0.0.1:5002/authenticate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ voter_id: voterId })
+            });
+            let authData = await authResponse.json();
+            if (authResponse.status !== 200) { logToTerminal("ERROR: " + authData.message); return; }
+            const token = authData.token;
+            logToTerminal("Identity Verified.");
+
+            // 2. Fetch Public Key
+            let pubKeyResponse = await fetch('http://127.0.0.1:5002/get_public_key');
+            let pubKeyData = await pubKeyResponse.json();
+            let n = BigInt(pubKeyData.n);
+            let g = BigInt(pubKeyData.g);
+            let nSq = n * n;
+
+            // 3. Encrypt: c = (g^m * r^n) mod n^2
+            logToTerminal("Encrypting ballot using Paillier...");
+            let m = BigInt(choice);
+            let r = BigInt(Math.floor(Math.random() * 10000000)) + 2n; // Random r
+            
+            let term1 = modPow(g, m, nSq);
+            let term2 = modPow(r, n, nSq);
+            let ciphertext = (term1 * term2) % nSq;
+
+            // 4. Send to Ballot Box
+            logToTerminal("Transmitting payload...");
+            let ballotResponse = await fetch('http://127.0.0.1:5003/cast_ballot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: token, ciphertext: ciphertext.toString() })
+            });
+            
+            let ballotResult = await ballotResponse.json();
+            logToTerminal("SERVER: " + ballotResult.message);
+
+        } catch (err) {
+            logToTerminal("ERROR: Pipeline failed. Check server status.");
+        }
+    }
+</script>
+</body>
+</html>
